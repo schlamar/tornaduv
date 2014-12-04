@@ -73,8 +73,11 @@ class UVLoop(IOLoop):
 
         self._fdwaker.close()
         self._close_loop_handles()
-        # Run the loop so the close callbacks are fired and memory is freed
-        assert not self._loop.run(pyuv.UV_RUN_NOWAIT), "there are pending handles"
+        if os.name == 'nt':
+            self._loop.run(pyuv.UV_RUN_NOWAIT)
+        else:
+            # Run the loop so the close callbacks are fired and memory is freed
+            assert not self._loop.run(pyuv.UV_RUN_NOWAIT), "there are pending handles"
         self._loop = None
 
     def add_handler(self, fd, handler, events):
@@ -110,7 +113,9 @@ class UVLoop(IOLoop):
         data = self._handlers.pop(fd, None)
         if data is not None:
             _, poll = data
-            poll.close()
+            if os.name != 'nt':
+                poll.close()
+
             poll.handler = None
 
     def start(self):
@@ -215,6 +220,10 @@ class UVLoop(IOLoop):
                 self._waker.wake()
 
     def _handle_poll_events(self, handle, poll_events, error):
+        fd = handle.fileno()
+        if fd not in self._handlers:
+            return
+
         events = 0
         if error is not None:
             # Some error was detected, signal readability and writability so that the
@@ -225,7 +234,7 @@ class UVLoop(IOLoop):
                 events |= IOLoop.READ
             if poll_events & pyuv.UV_WRITABLE:
                 events |= IOLoop.WRITE
-        fd = handle.fileno()
+
         try:
             obj, poll = self._handlers[fd]
             callback_fd = fd
@@ -254,7 +263,8 @@ class UVLoop(IOLoop):
     def _close_loop_handles(self):
         for handle in self._loop.handles:
             if not handle.closed:
-                handle.close()
+                if not (isinstance(handle, pyuv.Poll) and os.name == 'nt'):
+                    handle.close()
 
 
 class _Timeout(object):
